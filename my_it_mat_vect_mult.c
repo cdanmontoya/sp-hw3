@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <mpi.h>
 
 /* función para generar <size> cantidad de datos aleatorios */
 void gen_data(double * array, int size);
@@ -18,39 +19,79 @@ void mat_vect_mult(double* A, double* x, double* y, int n, int it);
 /* función para imprimir un vector llamado <name> de tamaño <m>*/
 void print_vector(char* name, double*  y, int m);
 
+void Mat_vect_mult(
+  double    local_A[]  /* in  */, 
+  double    local_x[]  /* in  */, 
+  double    local_y[]  /* out */,
+  int       local_m    /* in  */, 
+  int       n          /* in  */,
+  int       local_n    /* in  */,
+  MPI_Comm  comm       /* in  */);
+
+void scatter_matrix(
+  double* A,
+  double local_A[],
+  int n,
+  int local_n,
+  int my_rank,
+  MPI_Comm comm);
+
+void scatter_vector(
+  double* x,
+  double local_x[],
+  int n,
+  int local_n,
+  int my_rank,
+  MPI_Comm comm);
+
+void get_input_dims(
+  int* n_p,
+  int* local_n_p,
+  int* iters_p,
+  long* seed_p,
+  int my_rank,
+  int comm_sz,
+  MPI_Comm comm);
+
 int main()
 {
-  double* A = NULL;
-  double* x = NULL;
-  double* y = NULL;
+  double* A = NULL, * local_A;
+  double* x = NULL, * local_x;
+  double* y = NULL, * local_y;
   int n, iters;
   long seed;
+  int my_rank, comm_size;
+  int local_n;
+  MPI_Comm comm;
+
+  MPI_Init(NULL, NULL);
+  comm = MPI_COMM_WORLD;
+  MPI_Comm_size(comm, &comm_size);
+  MPI_Comm_rank(comm, &my_rank);
 
   // Obtener las dimensiones
-  printf("Ingrese la dimensión n:\n");
-  scanf("%d", &n);
-  printf("Ingrese el número de iteraciones:\n");
-  scanf("%d", &iters);
-  printf("Ingrese semilla para el generador de números aleatorios:\n");
-  scanf("%ld", &seed);
-  srand(seed);
+  get_input_dims(&n, &local_n, &iters, &seed, my_rank, comm_size, comm);
 
   // la matriz A tendrá una representación unidimensional
   A = malloc(sizeof(double) * n * n);
   x = malloc(sizeof(double) * n);
   y = malloc(sizeof(double) * n);
 
+  local_A = malloc(sizeof(double) * n * n);
+  local_x = malloc(sizeof(double) * n);
+  local_y = malloc(sizeof(double) * n);
+
   //generar valores para las matrices
   gen_data(A, n*n);
   gen_data(x, n);
 
-  mat_vect_mult(A, x, y, n, iters);
+  scatter_matrix(A, local_A, n, local_n, my_rank, comm);
+  scatter_vector(x, local_x, n, local_n, my_rank, comm);
 
-  print_vector("y", y, n);
-  free(A);
-  free(x);
-  free(y);
-  
+  Mat_vect_mult(local_A, local_x, local_y, local_n, n, local_n, comm);
+
+  print_vector("y", local_y, n);
+  MPI_Finalize();
   return 0;
 }
 
@@ -80,4 +121,94 @@ void print_vector(char* name, double*  y, int m) {
    for (i = 0; i < m; i++)
       printf("%f ", y[i]);
    printf("\n");
+}
+
+void Mat_vect_mult(
+      double    local_A[]  /* in  */, 
+      double    local_x[]  /* in  */, 
+      double    local_y[]  /* out */,
+      int       local_m    /* in  */, 
+      int       n          /* in  */,
+      int       local_n    /* in  */,
+      MPI_Comm  comm       /* in  */) {
+   double* x;
+   int local_i, j;
+   int local_ok = 1;
+
+   x = malloc(n*sizeof(double));
+   MPI_Allgather(local_x, local_n, MPI_DOUBLE,
+         x, local_n, MPI_DOUBLE, comm);
+
+   for (local_i = 0; local_i < local_m; local_i++) {
+      local_y[local_i] = 0.0;
+      for (j = 0; j < n; j++)
+         local_y[local_i] += local_A[local_i*n+j]*x[j];
+   }
+   free(x);
+}
+
+
+void get_input_dims(
+  int* n_p,
+  int* local_n_p,
+  int* iters_p,
+  long* seed_p,
+  int my_rank,
+  int comm_sz,
+  MPI_Comm comm
+  ){
+    if (my_rank == 0) {
+      printf("Ingrese la dimensión n:\n");
+      scanf("%d", n_p);
+      printf("Ingrese el número de iteraciones:\n");
+      scanf("%d", iters_p);
+      printf("Ingrese semilla para el generador de números aleatorios:\n");
+      scanf("%ld", seed_p);
+    }
+    MPI_Bcast(n_p, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(iters_p, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(seed_p, 1, MPI_LONG, 0, MPI_COMM_WORLD);
+    srand(*seed_p);
+
+    *local_n_p = *n_p/comm_sz;
+  }
+
+  void scatter_matrix(
+    double* A,
+    double local_A[],
+    int n,
+    int local_n,
+    int my_rank,
+    MPI_Comm comm
+  ) {
+    int i, j;
+
+    if (my_rank == 0) {
+      MPI_Scatter(A, local_n*n, MPI_DOUBLE, 
+            local_A, local_n*n, MPI_DOUBLE, 0, comm);
+    } else {
+      MPI_Scatter(A, local_n*n, MPI_DOUBLE, 
+            local_A, local_n*n, MPI_DOUBLE, 0, comm);
+    }
+  }
+
+void scatter_vector(
+  double* x,
+  double local_x[],
+  int n,
+  int local_n,
+  int my_rank,
+  MPI_Comm comm
+) {
+  double* vec = NULL;
+  int i;
+
+  if (my_rank == 0) {
+    MPI_Scatter(x, local_n, MPI_DOUBLE,
+            local_x, local_n, MPI_DOUBLE, 0, comm);
+  } else {
+    MPI_Scatter(x, local_n, MPI_DOUBLE,
+            local_x, local_n, MPI_DOUBLE, 0, comm);
+  }
+
 }
