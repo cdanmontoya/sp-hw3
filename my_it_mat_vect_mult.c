@@ -100,7 +100,6 @@ int main()
   Mat_vect_mult_par(local_A, local_x, local_y, local_n, n, local_n, iters, comm);
 
   print_vector("y", local_y, n);
-
   Print_vector_par("Y par", local_y, n, local_n, my_rank, comm);
   MPI_Finalize();
   return 0;
@@ -155,9 +154,12 @@ void Mat_vect_mult_par(
   for (h = 0; h < iters; h++) {
     for (local_i = 0; local_i < local_m; local_i++) {
       local_y[local_i] = 0.0;
-      for (j = 0; j < n; j++)
+      for (j = 0; j < n; j++) {
          local_y[local_i] += local_A[local_i*n+j]*x[j];
+      }
     }
+
+    MPI_Barrier(comm);
 
     for(local_i = 0; local_i < n; local_i++)
       local_A[local_i] = local_y[local_i];
